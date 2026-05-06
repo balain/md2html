@@ -11,6 +11,7 @@ enum Block {
     UnorderedList(Vec<String>),
     OrderedList(Vec<String>),
     Blockquote(Vec<String>),
+    Table { headers: Vec<String>, rows: Vec<Vec<String>> },
 }
 
 fn parse_blocks(input: &str) -> Vec<Block> {
@@ -52,6 +53,12 @@ fn parse_blocks(input: &str) -> Vec<Block> {
 
         if let Some((items, next)) = parse_blockquote(&lines, i) {
             blocks.push(Block::Blockquote(items));
+            i = next;
+            continue;
+        }
+
+        if let Some((block, next)) = parse_table(&lines, i) {
+            blocks.push(block);
             i = next;
             continue;
         }
@@ -108,6 +115,21 @@ fn render_blocks(blocks: &[Block]) -> String {
                     out.push_str(&format!("<p>{}</p>\n", render_inline(line)));
                 }
                 out.push_str("</blockquote>\n");
+            }
+            Block::Table { headers, rows } => {
+                out.push_str("<table>\n<thead>\n<tr>\n");
+                for header in headers {
+                    out.push_str(&format!("<th>{}</th>\n", render_inline(header)));
+                }
+                out.push_str("</tr>\n</thead>\n<tbody>\n");
+                for row in rows {
+                    out.push_str("<tr>\n");
+                    for cell in row {
+                        out.push_str(&format!("<td>{}</td>\n", render_inline(cell)));
+                    }
+                    out.push_str("</tr>\n");
+                }
+                out.push_str("</tbody>\n</table>\n");
             }
         }
     }
@@ -256,6 +278,7 @@ fn parse_paragraph(lines: &[&str], start: usize) -> (String, usize) {
             || line.trim_start().starts_with("```")
             || line.trim_start().starts_with('>')
             || is_list_start(line)
+            || parse_table(lines, i).is_some()
         {
             break;
         }
@@ -265,6 +288,45 @@ fn parse_paragraph(lines: &[&str], start: usize) -> (String, usize) {
     }
 
     (parts.join(" "), i)
+}
+
+fn is_table_row(line: &str) -> bool {
+    line.contains('|')
+}
+
+fn is_separator_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.contains('|') && trimmed.chars().all(|c| matches!(c, '|' | '-' | ':' | ' '))
+}
+
+fn split_table_row(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let inner = trimmed.strip_prefix('|').unwrap_or(trimmed);
+    let inner = inner.strip_suffix('|').unwrap_or(inner);
+    inner.split('|').map(|cell| cell.trim().to_string()).collect()
+}
+
+fn parse_table(lines: &[&str], start: usize) -> Option<(Block, usize)> {
+    if start + 1 >= lines.len() {
+        return None;
+    }
+    let header_line = lines[start].trim_end();
+    let sep_line = lines[start + 1].trim_end();
+    if !is_table_row(header_line) || !is_separator_row(sep_line) {
+        return None;
+    }
+    let headers = split_table_row(header_line);
+    let mut rows = Vec::new();
+    let mut i = start + 2;
+    while i < lines.len() {
+        let line = lines[i].trim_end();
+        if line.trim().is_empty() || !is_table_row(line) {
+            break;
+        }
+        rows.push(split_table_row(line));
+        i += 1;
+    }
+    Some((Block::Table { headers, rows }, i))
 }
 
 fn is_list_start(line: &str) -> bool {
@@ -391,6 +453,33 @@ mod tests {
         assert!(html.contains("<ul>"));
         assert!(html.contains("<li>One</li>"));
         assert!(html.contains("<li>Two</li>"));
+    }
+
+    #[test]
+    fn renders_table() {
+        let input = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |\n";
+        let html = markdown_to_html(input);
+
+        assert!(html.contains("<table>"));
+        assert!(html.contains("<thead>"));
+        assert!(html.contains("<th>Name</th>"));
+        assert!(html.contains("<th>Age</th>"));
+        assert!(html.contains("<tbody>"));
+        assert!(html.contains("<td>Alice</td>"));
+        assert!(html.contains("<td>30</td>"));
+        assert!(html.contains("<td>Bob</td>"));
+        assert!(html.contains("<td>25</td>"));
+        assert!(html.contains("</table>"));
+    }
+
+    #[test]
+    fn renders_table_with_inline_formatting() {
+        let input = "| Item | Description |\n|------|-------------|\n| **Bold** | `code` |\n";
+        let html = markdown_to_html(input);
+
+        assert!(html.contains("<th>Item</th>"));
+        assert!(html.contains("<td><strong>Bold</strong></td>"));
+        assert!(html.contains("<td><code>code</code></td>"));
     }
 
     #[test]
